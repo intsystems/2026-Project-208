@@ -1,5 +1,4 @@
-# Title
-Investigating the Effectiveness of Generative Drifting for Single-Step Super-Resolution
+# Evaluating the Effectiveness of Generative Drifting for Single-Step Super-Resolution
 <!-- Change `kisnikser/m1p-template` to `intsystems/your-repository`-->
 [![License](https://badgen.net/github/license/kisnikser/m1p-template?color=green)](https://github.com/kisnikser/m1p-template/blob/main/LICENSE)
 [![GitHub Contributors](https://img.shields.io/github/contributors/kisnikser/m1p-template)](https://github.com/kisnikser/m1p-template/graphs/contributors)
