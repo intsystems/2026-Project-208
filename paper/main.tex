@@ -58,12 +58,8 @@
 
 \author{
   Kseniia Ibragimova\\
-  MIPT\\
-  Moscow, Russia\\
   \And
   Andrei Filatov\\
-  MIPT\\
-  Moscow, Russia\\
 }
 
 
@@ -73,22 +69,20 @@
 \maketitle
 
 \begin{abstract}
-    This work investigates the applicability of the Generative Drifting framework to single-step image super-resolution. Existing super-resolution methods face a fundamental trade-off between perceptual quality and inference speed. To address this problem, we explore the Generative Drifting paradigm, which models generation as deterministic transport between probability distributions using a learned vector field. We propose a conditional formulation that learns a direct transport from low-resolution to high-resolution images in a single forward pass. Experiments show competitive reconstruction quality and improved efficiency compared with GAN-based and distilled diffusion models, measured using PSNR, SSIM, LPIPS, and inference time.
+    This work investigates the applicability of the Generative Drifting framework to single-step image super-resolution. Existing super-resolution methods face a fundamental trade-off between perceptual quality and inference speed. To address this problem, we explore the Generative Drifting paradigm, which models generation as deterministic transport between probability distributions using a learned vector field. We propose a conditional formulation that learns a direct transport from low-resolution to high-resolution images in a single forward pass. Experiments show competitive reconstruction quality and improved efficiency compared to GAN-based and distilled diffusion models, measured using PSNR, SSIM, LPIPS, and inference time.
 \end{abstract}
 
 \textbf{Keywords:} Generative Drifting, Super-Resolution, One-Step Generation
 
 \section{Introduction}\label{sec:intro}
 
-\section{Introduction}
 
 Generative modeling aims to learn mappings between complex high-dimensional data distributions. 
 In image restoration tasks such as single-image super-resolution (SR), the objective is to reconstruct a high-resolution (HR) image from its low-resolution (LR) observation. 
 Formally, this problem can be interpreted as learning a conditional transformation that maps images from the LR domain to the HR domain. 
-Single-image super-resolution has numerous practical applications, including medical imaging, remote sensing, video restoration, and digital photography. 
 Despite substantial progress in recent years, designing models that simultaneously achieve high perceptual quality and efficient inference remains a challenging problem.
 
-Early deep learning approaches to super-resolution relied on convolutional neural networks trained with pixel-wise reconstruction losses. Works such as SRCNN~\cite{dong2015srcnn} first demonstrated the effectiveness of deep learning for SR, while subsequent architectures like VDSR~\cite{kim2016vdsr}, EDSR~\cite{lim2017edsr}, and RCAN~\cite{zhang2018rcan} pushed the performance further through deeper networks and advanced architectural designs. Such methods typically produce images with high peak signal-to-noise ratio (PSNR) but often fail to recover realistic textures. 
+Early deep learning approaches to super-resolution relied on convolutional neural networks trained with pixel-wise reconstruction losses. Work such as SRCNN~\cite{dong2015srcnn} first demonstrated the effectiveness of deep learning for SR, while subsequent architectures such as VDSR~\cite{kim2016vdsr}, EDSR~\cite{lim2017edsr} and RCAN~\cite{zhang2018rcan} further increased performance through deeper networks and advanced architectural designs. Such methods typically produce images with high peak signal-to-noise ratio (PSNR) but often fail to recover realistic textures. 
 
 To address this limitation, adversarial learning was introduced in SRGAN~\cite{ledig2017srgan}, which employs a discriminator network to encourage photo-realistic outputs. 
 Subsequent improvements such as ESRGAN~\cite{wang2018esrgan} further enhanced perceptual quality through improved architectures and perceptual loss functions. 
@@ -244,12 +238,40 @@ $f_{\theta^{*}}$, and the inference procedure consists of a single forward pass
 \hat{x}^{HR}=f_{\theta^{*}}(x^{LR}).
 \]
 
-\section{Method}\label{sec:method}
 
-\section{Experiments}\label{sec:exp}
 
-To verify the theoretical estimates obtained, we conducted a detailed empirical study...
+\section{Preliminary experiment}\label{sec:exp}
 
+\textbf{Goal.} The goal of the preliminary experiment is to verify the feasibility of conditional Generative Drifting for one-step super-resolution and compare it with a plain residual baseline.
+
+\textbf{Dataset.} We use FashionMNIST (60k train / 10k test, grayscale \(28\times28\)). Low-resolution inputs are generated synthetically by Gaussian blur (kernel \(5\times5\), \(\sigma=1.0\)) followed by bicubic downsampling with scale factor 4 and bicubic upsampling.
+
+\textbf{Setup.} The model is a lightweight residual CNN (6 blocks, 64 channels). The drifting version additionally uses a frozen feature encoder. Both models are trained for 3 epochs with AdamW, learning rate \(2\cdot10^{-4}\), batch size 128. Evaluation metric is PSNR.
+
+\textbf{Results.} Bicubic interpolation achieves 15.548 dB PSNR, the plain model reaches 18.619 dB, and the drifting model achieves 18.426 dB. Thus, both models outperform bicubic interpolation, while drifting does not improve over the plain baseline in this toy setup.
+
+\textbf{Preliminary report.} The results confirm that the proposed formulation is feasible and can be trained stably. However, its advantage is not yet visible on this simple dataset, which motivates further experiments on more realistic benchmarks and with additional metrics.
+
+\begin{table}[h]
+\centering
+\caption{PSNR (dB) on FashionMNIST toy experiment}
+\begin{tabular}{lc}
+\toprule
+Method & PSNR \\
+\midrule
+Bicubic & 15.548 \\
+Plain SR & 18.619 \\
+Drift SR & 18.426 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.8\linewidth]{toy_exp.png}
+\caption{Qualitative comparison of super-resolution results. From top to bottom: ground truth, bicubic interpolation, plain SR, and drifting SR.}
+\label{fig:sr_results}
+\end{figure}
 \section{Discussion}\label{sec:disc}
 
 TODO
