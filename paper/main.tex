@@ -44,7 +44,7 @@
 %%%
 
 
-\title{Generative Drifting for One-Step Super-Resolution}
+\title{Conditional Generative Drifting for One-Step One-to-Many Super-Resolution}
 
 
 % The \author macro works with any number of authors. There are two commands
@@ -69,259 +69,619 @@
 \maketitle
 
 \begin{abstract}
-    This work investigates the applicability of the Generative Drifting framework to single-step image super-resolution. Existing super-resolution methods face a fundamental trade-off between perceptual quality and inference speed. To address this problem, we explore the Generative Drifting paradigm, which models generation as deterministic transport between probability distributions using a learned vector field. We propose a conditional formulation that learns a direct transport from low-resolution to high-resolution images in a single forward pass. Experiments show competitive reconstruction quality and improved efficiency compared to GAN-based and distilled diffusion models, measured using PSNR, SSIM, LPIPS, and inference time.
+This work investigates the applicability of the Generative Drifting framework to one-step image super-resolution in the one-to-many setting. A single low-resolution image may correspond to multiple plausible high-resolution reconstructions, yet most efficient super-resolution methods are trained deterministically and therefore tend to produce averaged, over-smoothed outputs. To address this limitation, we explore the Generative Drifting paradigm, which models generation through a learned drift field and enables single-step inference. We propose a conditional stochastic formulation that learns a direct mapping from a low-resolution image and noise to plausible high-resolution images in a single forward pass. The proposed method defines drifting in residual feature space, encouraging generated samples to move toward plausible high-resolution targets while preventing collapse to a single solution. Experiments evaluate reconstruction quality, perceptual realism, and diversity using PSNR, SSIM, LPIPS, and one-to-many consistency metrics.
 \end{abstract}
-
-\textbf{Keywords:} Generative Drifting, Super-Resolution, One-Step Generation
 
 \section{Introduction}\label{sec:intro}
 
+Single-image super-resolution (SR) aims to reconstruct a high-resolution (HR) image from a low-resolution (LR) observation. Although SR is often formulated as a supervised image-to-image regression problem, it is fundamentally ill-posed: the degradation process removes high-frequency information, and therefore multiple HR images may be consistent with the same LR input \cite{lugmayr2020srflow,jo2021adatarget,park2021onetomanysr}. This ambiguity is especially pronounced in textured regions, where different reconstructions may preserve the same low-frequency structure while differing in fine details. Consequently, SR should be viewed not only as a deterministic restoration task, but also as a conditional generative problem.
 
-Generative modeling aims to learn mappings between complex high-dimensional data distributions. 
-In image restoration tasks such as single-image super-resolution (SR), the objective is to reconstruct a high-resolution (HR) image from its low-resolution (LR) observation. 
-Formally, this problem can be interpreted as learning a conditional transformation that maps images from the LR domain to the HR domain. 
-Despite substantial progress in recent years, designing models that simultaneously achieve high perceptual quality and efficient inference remains a challenging problem.
+Classical deep SR methods such as SRCNN \cite{dong2015srcnn}, VDSR \cite{kim2016vdsr}, EDSR \cite{lim2017edsr}, and RCAN \cite{zhang2018rcan} achieve strong distortion-oriented performance under paired supervision. However, when trained with pixel-wise objectives, they are encouraged to predict a single conditional mean and therefore often produce averaged and over-smoothed textures \cite{ledig2017srgan,wang2018esrgan,jo2021adatarget}. Perceptual and adversarial approaches, including SRGAN \cite{ledig2017srgan}, ESRGAN \cite{wang2018esrgan}, and Real-ESRGAN \cite{wang2021realesrgan}, improve visual sharpness and perceptual realism, but they are also associated with unstable optimization, hallucinated high-frequency details, and limited control over the set of admissible outputs \cite{wang2018esrgan,wang2021realesrgan}. Thus, existing SR methods often face a familiar trade-off: distortion-oriented models are faithful but over-smooth, whereas perceptual models are sharper but less stable and less controllable.
 
-Early deep learning approaches to super-resolution relied on convolutional neural networks trained with pixel-wise reconstruction losses. Work such as SRCNN~\cite{dong2015srcnn} first demonstrated the effectiveness of deep learning for SR, while subsequent architectures such as VDSR~\cite{kim2016vdsr}, EDSR~\cite{lim2017edsr} and RCAN~\cite{zhang2018rcan} further increased performance through deeper networks and advanced architectural designs. Such methods typically produce images with high peak signal-to-noise ratio (PSNR) but often fail to recover realistic textures. 
+A more principled direction is to treat SR explicitly as conditional generation. SRFlow \cite{lugmayr2020srflow} models the conditional distribution of HR images given an LR input rather than a single point estimate. Adaptive Target Generation \cite{jo2021adatarget} further argues that the paired HR image should not always be interpreted as the only valid supervisory target. Related ideas also appear in one-to-many SR formulations, where several plausible HR outputs are generated for the same LR input \cite{park2021onetomanysr}. These works highlight that SR ambiguity is not a training artifact but a structural property of the problem.
 
-To address this limitation, adversarial learning was introduced in SRGAN~\cite{ledig2017srgan}, which employs a discriminator network to encourage photo-realistic outputs. 
-Subsequent improvements such as ESRGAN~\cite{wang2018esrgan} further enhanced perceptual quality through improved architectures and perceptual loss functions. 
-However, adversarial training is often unstable and may introduce artifacts or hallucinated structures that are inconsistent with the input image.
+Another relevant line of research concerns sample construction and representation geometry in low-level restoration. In particular, contrastive SR methods show that naive positive-negative construction is insufficient for dense prediction tasks. PCL-SR \cite{wu2021pclsr} demonstrates that sharpened HR variants can serve as informative positives and mildly blurred HR variants as hard negatives, since SR requires feature comparisons that are sensitive to texture and degradation rather than to global semantic similarity. This observation is directly relevant in the one-to-many setting, where one must specify not only how to generate diverse outputs, but also what kinds of alternatives should be regarded as plausible.
 
-More recently, diffusion-based generative models have achieved remarkable results in image restoration. 
-Methods such as SR3~\cite{saharia2021sr3} formulate super-resolution as an iterative denoising process and produce highly realistic reconstructions. 
-Nevertheless, diffusion models typically require dozens or hundreds of inference steps, which significantly increases computational cost. 
-To address this issue, several works attempt to accelerate diffusion sampling through distillation or architectural modifications~\cite{salimans2022progressive}. 
-For example, SinSR~\cite{wang2023sinsr} and OSEDiff~\cite{wu2024osediff} approximate multi-step diffusion dynamics with a single-step network. 
-Despite these advances, such methods often rely on complex training procedures or require pre-trained diffusion models.
+In parallel, generative modeling has increasingly moved toward efficient one-step generation. Diffusion-based SR methods such as SR3 \cite{saharia2021sr3} and latent restoration approaches based on diffusion priors \cite{rombach2022latent} produce highly realistic outputs, but their iterative inference is computationally expensive. Considerable effort has therefore been devoted to acceleration, including progressive distillation \cite{salimans2022progressive}, consistency-type approximations \cite{song2023consistency}, flow-based one-step models \cite{lipman2023flowmatching,geng2025meanflows}, and fast SR-oriented approximations such as SinSR \cite{wang2024sinsr} and OSEDiff \cite{wu2024osediff}. These methods reduce inference cost, yet most remain conceptually tied to diffusion or flow trajectories, teacher models, or distillation pipelines.
 
-An alternative direction for fast generative modeling is based on transport and flow formulations. 
-Normalizing flows have been applied to super-resolution in SRFlow~\cite{lugmayr2020srflow}, enabling probabilistic reconstruction of HR images via exact likelihood training. 
-More recently, several works propose learning transport dynamics through vector fields, including Flow Matching~\cite{lipman2023flowmatching} and related one-step generative modeling frameworks such as Consistency Models~\cite{song2023consistency} and MeanFlows~\cite{geng2025meanflows}. 
-These approaches interpret generation as transporting samples between distributions along learned velocity fields.
+A recent alternative is Generative Drifting \cite{deng2026drifting}, which reformulates generation as the evolution of the pushforward distribution during training rather than at inference time. In that framework, a generator is trained through a drifting field and a fixed-point regression objective toward a frozen drifted target \cite{deng2026drifting}. The original method already supports feature-space drifting and conditional generation \cite{deng2026drifting}. However, super-resolution poses a substantially different form of conditioning. In class-conditional generation, the condition specifies a semantic category while leaving the instance largely unconstrained. In SR, by contrast, the condition is an observed LR image that imposes a strong measurement constraint on the output. This motivates the present work: we investigate whether the fixed-point drifting principle can be adapted to one-step conditional super-resolution in the one-to-many setting. Our central idea is to specialize drifting to the geometry of SR, so that generated samples move toward admissible HR structures associated with the same LR observation while being discouraged from collapsing to identical reconstructions. In this way, we aim to preserve the efficiency of one-step generation while enforcing fidelity to the measurement and allowing controlled diversity only within the admissible solution set.
 
-A recent framework, Generative Drifting~\cite{deng2026drifting}, proposes a deterministic generative model trained using a drifting vector field that moves generated samples toward the data distribution. 
-The method defines attraction and repulsion forces between samples in feature space and learns a transport map that aligns generated and real data distributions. 
-Unlike diffusion-based approaches, drifting-based models perform generation in a single forward pass, enabling efficient inference.
-
-In this work, we investigate the applicability of the Generative Drifting framework to the conditional task of single-image super-resolution. 
-While the original drifting formulation focuses on unconditional generative modeling, super-resolution requires conditioning on the observed low-resolution image. 
-We therefore propose a conditional drifting formulation that learns a direct transport map from LR images to their HR counterparts.
-
-The proposed method constructs a drifting vector field in a joint feature space that incorporates both residual image representations and conditioning information from the LR input. 
-This formulation allows generated samples to move toward the manifold of realistic HR images while preserving consistency with the observed LR input. 
-As a result, the model performs super-resolution in a single forward pass without iterative refinement or adversarial training.
-
-The contributions of this work can be summarized as follows:
-
+The main contributions of this work are as follows:
 \begin{itemize}
-\item We propose a conditional formulation of the Generative Drifting framework for the task of single-image super-resolution.
-\item We introduce a drifting vector field defined in a joint feature space that incorporates both residual image information and conditioning from the LR input.
-\item We develop a one-step super-resolution model that avoids iterative diffusion sampling and adversarial training while maintaining competitive reconstruction quality.
-\item We conduct experimental evaluation on standard super-resolution benchmarks using PSNR, SSIM, LPIPS, and runtime metrics.
+    \item We formulate single-image super-resolution as a conditional one-to-many generation problem and identify the adaptation of fixed-point generative drifting to observation-conditioned SR as the central methodological challenge.
+    \item We propose a one-step stochastic SR framework that specializes the drifting principle to the SR setting, where the condition is the LR observation itself rather than a semantic label.
+    \item We introduce an SR-oriented drifting formulation in residual feature space, based on admissible HR targets and same-condition repulsion, to model controlled diversity of plausible reconstructions.
+    \item We connect the fixed-point philosophy of Generative Drifting with task-aware target construction ideas from low-level contrastive SR, providing a principled route toward one-step, faithful, and diversity-aware super-resolution.
 \end{itemize}
 
-The paper proposes a drifting-based method for conditional image super-resolution, providing efficient one-step reconstruction and distinguished by the use of a conditional drifting vector field defined in a joint feature space.
-\section{Problem Statement}\label{sec:prelim}
 
+\section{Problem Statement}\label{sec:problem}
+
+\paragraph{General description.}
+We consider single-image super-resolution as a conditional inverse problem. Let
+\[
+x^{LR} \in \mathcal{X}_{LR} \subset \mathbb{R}^{h\times w\times c}
+\]
+be a low-resolution image and
+\[
+x^{HR} \in \mathcal{X}_{HR} \subset \mathbb{R}^{H\times W\times c},
+\qquad H=rh,\; W=rw,
+\]
+be its high-resolution counterpart for a fixed scale factor \(r\in\mathbb{N}\). The observation model is
+\[
+x^{LR} = D(x^{HR}) + \xi,
+\]
+where \(D:\mathcal{X}_{HR}\to\mathcal{X}_{LR}\) is a degradation operator and \(\xi\) denotes measurement mismatch. In the present work, \(D\) is identified with bicubic downsampling.
+
+\paragraph{Sample set.}
 Let
 \[
 \mathcal{D}=\{(x_i^{LR},x_i^{HR})\}_{i=1}^{N}
 \]
-be a dataset of paired low-resolution and high-resolution images, where
+be a paired training set sampled from an unknown joint distribution
 \[
-x_i^{LR}\in\mathbb{R}^{h\times w\times c}, \qquad
-x_i^{HR}\in\mathbb{R}^{H\times W\times c},
+p_{\mathrm{data}}(x^{LR},x^{HR}).
 \]
-and $H=sh$, $W=sw$ for a fixed scaling factor $s$.
 
-The goal is to construct a model that reconstructs a high-resolution image
-from its low-resolution observation.
+\paragraph{Statistical hypothesis.}
+We assume that the conditional distribution
+\[
+p(x^{HR}\mid x^{LR})
+\]
+is non-degenerate. That is, one LR observation may correspond to several plausible HR reconstructions that share the same low-frequency structure and differ mainly in high-frequency details. Therefore, SISR is treated here as a one-to-many conditional generation problem.
 
+\paragraph{Model.}
+A \emph{model} is a parametric family of stochastic mappings
+\[
+G_{\theta}:\mathcal{X}_{LR}\times\mathcal{E}\to\mathcal{X}_{HR},
+\qquad \theta\in\Theta,
+\]
+where \(\varepsilon\sim p_{\varepsilon}\) is an auxiliary random variable. For a fixed LR input \(x_i^{LR}\), the model produces \(K\) HR candidates
+\[
+\hat{x}_i^{(k)} = G_{\theta}(x_i^{LR},\varepsilon_i^{(k)}),
+\qquad k=1,\dots,K.
+\]
+
+\paragraph{Conditional pushforward.}
+For a fixed observation \(x_i^{LR}\), the generator induces a conditional pushforward distribution
+\[
+q_{\theta}(\,\cdot \mid x_i^{LR})
+=
+\bigl[G_{\theta}(x_i^{LR},\cdot)\bigr]_{\#} p_{\varepsilon}.
+\]
+The goal is to learn a conditional generator whose outputs approximate the admissible HR distribution associated with the given LR image.
+
+\paragraph{Residual parameterization.}
 Let
 \[
-f_{\theta}:\mathbb{R}^{h\times w\times c}\rightarrow\mathbb{R}^{H\times W\times c}
+u:\mathcal{X}_{LR}\to\mathcal{X}_{HR}
 \]
-be a parametric family of functions, where $\theta\in\Theta$ is the vector of
-model parameters and $\Theta$ is the admissible parameter space.
-For an input image $x_i^{LR}$, the model predicts
+be bicubic upsampling, and define
 \[
-\hat{x}_i^{HR}=f_{\theta}(x_i^{LR}).
+x_i^{UP}=u(x_i^{LR}).
+\]
+We use the residual form
+\[
+\hat{x}_i^{(k)} = x_i^{UP} + r_i^{(k)},
+\]
+where \(r_i^{(k)}\) is the predicted residual. This separates deterministic low-frequency reconstruction from ambiguous high-frequency correction.
+
+\paragraph{Admissible target set.}
+For each pair \((x_i^{LR},x_i^{HR})\), define a finite set of admissible HR targets
+\[
+\mathcal{P}_i=\{x_{i,m}^{+}\}_{m=1}^{M},
+\]
+such that
+\[
+x_i^{HR}\in\mathcal{P}_i
+\qquad\text{and}\qquad
+\|D(x_{i,m}^{+})-x_i^{LR}\|_1 \le \delta
+\quad \forall m.
+\]
+The set \(\mathcal{P}_i\) represents plausible HR realizations consistent with the same LR observation.
+
+\paragraph{Feature representation.}
+Let
+\[
+\Phi=\{\phi_j\}_{j=1}^{J}
+\]
+be a family of feature maps extracted from a fixed encoder. The index \(j\) enumerates features at different scales, locations, or pooled statistics. For each feature \(\phi_j\), define the residual representation relative to the bicubic baseline:
+\[
+g_{i,j}^{(k)} = \phi_j(\hat{x}_i^{(k)}) - \phi_j(x_i^{UP}),
+\qquad
+p_{i,j}^{(m)} = \phi_j(x_{i,m}^{+}) - \phi_j(x_i^{UP}).
 \]
 
-The reconstruction is performed as a residual correction of an upsampled
-low-resolution image. Let
+\paragraph{Criterion.}
+The \emph{criterion} is the objective
 \[
-u:\mathbb{R}^{h\times w\times c}\rightarrow\mathbb{R}^{H\times W\times c}
-\]
-be a fixed upsampling operator. Define
-\[
-x_i^{UP}=u(x_i^{LR}),
-\]
-and the generated and target residuals
-\[
-r_i^{gen}=\hat{x}_i^{HR}-x_i^{UP}, \qquad
-r_i^{pos}=x_i^{HR}-x_i^{UP}.
-\]
-
-Following the Generative Drifting framework, for each generated sample
-a drift vector
-\[
-V_i=
-\sum_{j=1}^{N}W_{ij}^{pos}r_j^{pos}
--
-\beta\sum_{j=1}^{N}W_{ij}^{neg}r_j^{gen}
-\]
-is constructed, where $W_{ij}^{pos}$ and $W_{ij}^{neg}$ are attraction and
-repulsion weights, respectively, and $\beta>0$ is a repulsion coefficient.
-
-The drift vector defines a target point
-\[
-\tilde{x}_i^{HR}=\hat{x}_i^{HR}+\eta V_i,
-\]
-where $\eta>0$ is the drift step.
-
-To estimate the model parameters, consider the following loss terms.
-
-The drift loss enforces consistency with the drift direction:
-\[
-L_{drift}^{(i)}=
-\left\|
-\hat{x}_i^{HR}-\tilde{x}_i^{HR}
-\right\|_1.
-\]
-
-The reconstruction loss measures the deviation from the ground-truth
-high-resolution image:
-\[
-L_{rec}^{(i)}=
-\left\|
-\hat{x}_i^{HR}-x_i^{HR}
-\right\|_1.
-\]
-
-The low-resolution consistency loss enforces compatibility between the
-reconstructed image and the observed low-resolution input:
-\[
-L_{LR}^{(i)}=
-\left\|
-D(\hat{x}_i^{HR})-x_i^{LR}
-\right\|_1,
+L(\theta)
+=
+\lambda_{\mathrm{rec}}L_{\mathrm{rec}}(\theta)
++
+\lambda_{\mathrm{LR}}L_{\mathrm{LR}}(\theta)
++
+\lambda_{\mathrm{drift}}L_{\mathrm{drift}}(\theta),
 \]
 where
 \[
-D:\mathbb{R}^{H\times W\times c}\rightarrow\mathbb{R}^{h\times w\times c}
-\]
-is a fixed degradation operator.
-
-The total empirical loss is defined as
-\[
-L(\theta)=
+L_{\mathrm{rec}}(\theta)
+=
 \frac{1}{N}\sum_{i=1}^{N}
+\bigl\|
+\hat{x}_i^{(1)}-x_i^{HR}
+\bigr\|_1
+\]
+is the anchor reconstruction loss,
+\[
+L_{\mathrm{LR}}(\theta)
+=
+\frac{1}{NK}\sum_{i=1}^{N}\sum_{k=1}^{K}
+\bigl\|
+D(\hat{x}_i^{(k)})-x_i^{LR}
+\bigr\|_1
+\]
+is the observation-consistency loss, and \(L_{\mathrm{drift}}\) is a conditional feature-space drifting loss defined below.
+
+\paragraph{External quality criteria.}
+The solution is evaluated by distortion- and perception-oriented criteria, including PSNR, SSIM, and LPIPS, and by diversity-aware criteria when multiple outputs are generated for the same LR input.
+
+\paragraph{Optimization statement.}
+A \emph{solution} is an optimal parameter vector
+\[
+\theta^\ast \in \arg\min_{\theta\in\Theta} L(\theta).
+\]
+An \emph{algorithm} is an iterative optimization procedure that updates \(\theta\) on mini-batches of paired LR/HR samples by minimizing the criterion.
+
+\paragraph{Restrictions on the solution.}
+The desired solution must satisfy:
+\begin{enumerate}
+    \item one-step inference at test time;
+    \item compatibility of all generated HR samples with the observed LR image;
+    \item non-collapse under repeated sampling for the same LR input;
+    \item preservation of a stable canonical reconstruction mode.
+\end{enumerate}
+
+\section{Theoretical Part}\label{sec:theory}
+
+\subsection{Conditional generative drifting for one-to-many super-resolution}
+
+We consider conditional one-to-many super-resolution, where a single low-resolution observation \(x_i^{LR}\) may correspond to several admissible high-resolution reconstructions. Our generator is a stochastic conditional residual model
+\[
+\hat{x}_i^{(k)} = G_{\theta}(x_i^{LR},\varepsilon_i^{(k)}),
+\qquad
+\varepsilon_i^{(k)} \sim p_{\varepsilon},
+\]
+which induces the conditional pushforward distribution
+\[
+q_{\theta}(\,\cdot\mid x_i^{LR})
+=
+\bigl[G_{\theta}(x_i^{LR},\cdot)\bigr]_{\#}p_{\varepsilon}.
+\]
+
+As in the original Drifting framework, training is based on a fixed-point principle: the current prediction is moved toward a frozen drifted target rather than by directly backpropagating through the drift field. However, in the present setting the condition is the observed LR image itself, and the drift is designed to move the conditional pushforward toward an admissible set of HR reconstructions associated with this observation. In this way, the method combines
+\begin{enumerate}
+    \item a stochastic conditional generator \(G_{\theta}(x^{LR},\varepsilon)\),
+    \item a conditional drifting mechanism in residual feature space,
+    \item reconstruction and degradation-consistency constraints.
+\end{enumerate}
+
+\subsection{Residual feature family}
+
+We compute drifting in a residual feature space defined relative to the bicubic baseline
+\[
+x_i^{UP}=u(x_i^{LR}),
+\]
+which removes most of the deterministic low-frequency structure already explained by bicubic upsampling and focuses the objective on uncertain high-frequency details.
+
+Let a fixed encoder produce feature maps
+\[
+F_1(x),F_2(x),\dots,F_S(x),
+\qquad
+F_s(x)\in\mathbb{R}^{C_s\times H_s\times W_s}.
+\]
+Following the multi-feature formulation of Drifting, the final objective is obtained by summing drifting terms over a family of feature vectors extracted from these maps. In the SR setting, we prioritize descriptors that preserve local texture and edge information.
+
+For each stage \(s\), the local descriptor at spatial location \((a,b)\) is
+\[
+\phi_{s,a,b}(x)=F_s(x)[:,a,b]\in\mathbb{R}^{C_s},
+\qquad
+1\le a\le H_s,\;1\le b\le W_s.
+\]
+To provide slightly larger spatial support, we also include pooled regional descriptors. For a pooling factor \(r\), let
+\[
+F_s^{(r)}(x)=\operatorname{Pool}_r(F_s(x)),
+\]
+where \(\operatorname{Pool}_r\) denotes average pooling over \(r\times r\) neighborhoods, and define
+\[
+\phi^{(r)}_{s,\alpha,\beta}(x)=F_s^{(r)}(x)[:,\alpha,\beta]\in\mathbb{R}^{C_s}.
+\]
+Optionally, one global descriptor per stage may also be included,
+\[
+\phi_s^{\mathrm{glob}}(x)=\frac{1}{H_sW_s}\sum_{a=1}^{H_s}\sum_{b=1}^{W_s}F_s(x)[:,a,b].
+\]
+
+Collecting all selected descriptors yields the feature family
+\[
+\Phi=\{\phi_j\}_{j=1}^{J},
+\]
+where the index \(j\) runs over encoder stage, spatial location, and optional pooling scale.
+
+For each generated sample \(\hat{x}_i^{(k)}\) and admissible positive target \(x_{i,m}^{+}\), we define residual feature vectors relative to the bicubic baseline:
+\[
+g_{i,j}^{(k)}=\phi_j(\hat{x}_i^{(k)})-\phi_j(x_i^{UP}),
+\qquad
+p_{i,j}^{(m)}=\phi_j(x_{i,m}^{+})-\phi_j(x_i^{UP}).
+\]
+Thus, drifting is performed on the uncertain reconstruction component rather than on the deterministic bicubic content.
+
+\subsection{Admissible positive targets}
+
+Unlike the unconditional setting, the positive set is conditional on the LR observation. For each condition \(i\), we define
+\[
+\mathcal{P}_i=\{x_{i,m}^{+}\}_{m=1}^{M},
+\qquad
+x_{i,1}^{+}=x_i^{HR}.
+\]
+For \(m\ge 2\), additional admissible targets are constructed from the paired HR image by mild detail-preserving transformations:
+\[
+x_{i,m}^{+} = \mathcal{S}_{\alpha,\sigma}(x_i^{HR})
+\qquad\text{or}\qquad
+x_{i,m}^{+} = \mathcal{H}_{\beta}(x_i^{HR}),
+\]
+where \(\mathcal{S}_{\alpha,\sigma}\) denotes an unsharp-mask type sharpening operator with strength \(\alpha\) and blur scale \(\sigma\), and \(\mathcal{H}_{\beta}\) denotes mild high-pass enhancement with strength \(\beta\).
+
+A candidate target is accepted only if it remains consistent with the LR observation:
+\[
+\|D(x_{i,m}^{+})-x_i^{LR}\|_1 \le \delta.
+\]
+Otherwise, it is replaced by the paired HR image.
+
+\subsection{Conditional drifting field}
+
+For each generated residual feature vector \(g_{i,j}^{(k)}\), we define the conditional drifting field
+\[
+V_{i,j}^{(k)}
+=
+V_{i,j}^{\mathrm{pos},(k)}
+-
+V_{i,j}^{\mathrm{neg},(k)}.
+\]
+
+The attraction term is computed over the admissible positive set
+\[
+\mathcal{P}_{i,j}=\{p_{i,j}^{(m)}\}_{m=1}^{M},
+\]
+as
+\[
+V_{i,j}^{\mathrm{pos},(k)}
+=
+\lambda_{\mathrm{pos}}
+\sum_{m=1}^{M}
+a_{i,j,m}^{(k)}
+\bigl(
+p_{i,j}^{(m)}-g_{i,j}^{(k)}
+\bigr),
+\]
+where
+\[
+a_{i,j,m}^{(k)}
+=
+\frac{\exp\!\bigl(\ell_{i,j,m}^{+,(k)}\bigr)}
+{\sum\limits_{m'=1}^{M}\exp\!\bigl(\ell_{i,j,m'}^{+,(k)}\bigr)},
+\qquad
+\ell_{i,j,m}^{+,(k)}
+=
+-\frac{\|g_{i,j}^{(k)}-p_{i,j}^{(m)}\|_2}{\tau_{\mathrm{pos}}}.
+\]
+
+The basic repulsion term is computed over competing generated samples under the same LR condition,
+\[
+\mathcal{N}_{i,j}^{\mathrm{same},(k)}
+=
+\{g_{i,j}^{(t)}\}_{t\neq k},
+\]
+as
+\[
+V_{i,j}^{\mathrm{same},(k)}
+=
+\lambda_{\mathrm{same}}
+\sum_{\substack{t=1\\ t\neq k}}^{K}
+b_{i,j,t}^{(k)}
+\bigl(
+g_{i,j}^{(t)}-g_{i,j}^{(k)}
+\bigr),
+\]
+where
+\[
+b_{i,j,t}^{(k)}
+=
+\frac{\exp\!\bigl(\ell_{i,j,t}^{\mathrm{same},(k)}\bigr)}
+{\sum\limits_{\substack{t'=1\\ t'\neq k}}^{K}\exp\!\bigl(\ell_{i,j,t'}^{\mathrm{same},(k)}\bigr)},
+\qquad
+\ell_{i,j,t}^{\mathrm{same},(k)}
+=
+-\frac{\|g_{i,j}^{(k)}-g_{i,j}^{(t)}\|_2}{\tau_{\mathrm{same}}}.
+\]
+
+Thus, even without any additional negatives, each generated sample is attracted toward admissible target residuals and repelled from alternative generated residuals associated with the same LR input.
+
+\subsection{Additional negatives}
+
+In addition to same-condition generated negatives, we optionally use auxiliary negatives of two types.
+
+First, one may use cross-condition negatives collected either from other samples in the current mini-batch or from a memory queue built from previous batches:
+\[
+\mathcal{Q}_j=\{q_{j,\ell}\}_{\ell=1}^{L_Q},
+\qquad
+q_{j,\ell}\in\mathbb{R}^{C_j}.
+\]
+These vectors correspond to generated residual features associated with different LR conditions and therefore serve only as auxiliary diversity regularizers.
+
+Second, one may introduce hard negatives constructed from the paired HR image by slight blur operators:
+\[
+x_{i,h}^{-}=\mathcal{B}_{\rho_h}(x_i^{HR}),
+\qquad
+h=1,\dots,H,
+\]
+where \(\mathcal{B}_{\rho_h}\) denotes a mild blur transformation with parameter \(\rho_h\). Their residual feature vectors are
+\[
+h_{i,j}^{(h)}=\phi_j(x_{i,h}^{-})-\phi_j(x_i^{UP}).
+\]
+Such negatives are meaningful for SR because they remain close to the target manifold while explicitly penalizing oversmoothed solutions, similarly to hard-negative constructions used in contrastive SR settings. 
+
+When auxiliary negatives are used, the full repulsion term becomes
+\[
+V_{i,j}^{\mathrm{neg},(k)}
+=
+V_{i,j}^{\mathrm{same},(k)}
++
+V_{i,j}^{\mathrm{queue},(k)}
++
+V_{i,j}^{\mathrm{hard},(k)},
+\]
+where
+\[
+V_{i,j}^{\mathrm{queue},(k)}
+=
+\lambda_{\mathrm{queue}}
+\sum_{\ell=1}^{L_Q}
+c_{i,j,\ell}^{(k)}
+\bigl(q_{j,\ell}-g_{i,j}^{(k)}\bigr),
+\]
+\[
+V_{i,j}^{\mathrm{hard},(k)}
+=
+\lambda_{\mathrm{hard}}
+\sum_{h=1}^{H}
+d_{i,j,h}^{(k)}
+\bigl(h_{i,j}^{(h)}-g_{i,j}^{(k)}\bigr),
+\]
+with
+\[
+c_{i,j,\ell}^{(k)}
+=
+\frac{\exp\!\bigl(-\|g_{i,j}^{(k)}-q_{j,\ell}\|_2/\tau_{\mathrm{queue}}\bigr)}
+{\sum\limits_{\ell'=1}^{L_Q}\exp\!\bigl(-\|g_{i,j}^{(k)}-q_{j,\ell'}\|_2/\tau_{\mathrm{queue}}\bigr)},
+\]
+and
+\[
+d_{i,j,h}^{(k)}
+=
+\frac{\exp\!\bigl(-\|g_{i,j}^{(k)}-h_{i,j}^{(h)}\|_2/\tau_{\mathrm{hard}}\bigr)}
+{\sum\limits_{h'=1}^{H}\exp\!\bigl(-\|g_{i,j}^{(k)}-h_{i,j}^{(h')}\|_2/\tau_{\mathrm{hard}}\bigr)}.
+\]
+
+In practice, \(\lambda_{\mathrm{queue}}\) should be smaller than \(\lambda_{\mathrm{same}}\), because queue negatives do not share the same LR condition. By contrast, \(\lambda_{\mathrm{hard}}\) may be non-negligible, since blurred HR variants directly target the oversmoothing failure mode.
+
+\subsection{Per-condition feature normalization}
+
+In the original Drifting formulation, feature-space losses are normalized feature-wise so that distances and drift magnitudes are comparable across heterogeneous feature families. In our conditional SR setting, the drifting field is evaluated independently for each LR condition \(i\). Therefore, both feature normalization and drift normalization are computed within each condition, using only same-condition residual features. This mirrors the original feature-wise normalization logic while adapting it to condition-wise drifting.
+
+For a fixed condition \(i\) and feature \(j\), let
+\[
+\mathcal{G}_{i,j}=\{g_{i,j}^{(k)}\}_{k=1}^{K},
+\qquad
+\mathcal{P}_{i,j}=\{p_{i,j}^{(m)}\}_{m=1}^{M},
+\]
+with \(g_{i,j}^{(k)},p_{i,j}^{(m)}\in\mathbb{R}^{C_j}\).
+
+We define the feature normalization scale
+\[
+S_{i,j}
+=
+\frac{1}{\sqrt{C_j}}
+\frac{1}{KM}
+\sum_{k=1}^{K}\sum_{m=1}^{M}
+\|g_{i,j}^{(k)}-p_{i,j}^{(m)}\|_2.
+\]
+If hard negatives are used, one may optionally include them in the same-condition scale estimate:
+\[
+S_{i,j}
+=
+\frac{1}{\sqrt{C_j}}
+\frac{1}{K(M+H)}
+\sum_{k=1}^{K}
+\left[
+\sum_{m=1}^{M}\|g_{i,j}^{(k)}-p_{i,j}^{(m)}\|_2
++
+\sum_{h=1}^{H}\|g_{i,j}^{(k)}-h_{i,j}^{(h)}\|_2
+\right].
+\]
+
+The normalized residual features are then
+\[
+\tilde g_{i,j}^{(k)}=\frac{g_{i,j}^{(k)}}{S_{i,j}+\varepsilon},
+\qquad
+\tilde p_{i,j}^{(m)}=\frac{p_{i,j}^{(m)}}{S_{i,j}+\varepsilon},
+\qquad
+\tilde h_{i,j}^{(h)}=\frac{h_{i,j}^{(h)}}{S_{i,j}+\varepsilon},
+\]
+where applicable.
+
+All similarity weights in the drifting field are computed from these normalized features. Denote the resulting drift in normalized feature space by \(\bar V_{i,j}^{(k)}\). We then normalize its magnitude by
+\[
+\Lambda_{i,j}
+=
 \left(
-L_{drift}^{(i)}
-+\lambda_{LR}L_{LR}^{(i)}
-+\lambda_{rec}L_{rec}^{(i)}
+\frac{1}{K\,C_j}
+\sum_{k=1}^{K}
+\|\bar V_{i,j}^{(k)}\|_2^2
+\right)^{1/2},
+\]
+and define the normalized drift
+\[
+\tilde V_{i,j}^{(k)}
+=
+\frac{\bar V_{i,j}^{(k)}}{\Lambda_{i,j}+\varepsilon}.
+\]
+
+If several indices \(j\) correspond to different spatial locations extracted from the same feature map, one may share the same normalization factors across that group by concatenating all such locations within condition \(i\) before computing \(S_{i,j}\) and \(\Lambda_{i,j}\), in the spirit of the original Drifting implementation.
+
+\subsection{Frozen drift target and multi-feature drifting loss}
+
+Following the fixed-point principle, we do not backpropagate through the drift field directly. Instead, for each \(i,j,k\), we form a frozen drift target
+\[
+\hat g_{i,j}^{(k)}
+=
+\operatorname{sg}
+\left(
+\tilde g_{i,j}^{(k)}+\eta\,\tilde V_{i,j}^{(k)}
 \right),
 \]
-where $\lambda_{LR}>0$ and $\lambda_{rec}>0$ are weighting coefficients.
+where \(\eta>0\) is the drift step size and \(\operatorname{sg}(\cdot)\) denotes the stop-gradient operator.
 
-The optimal model parameters are obtained by solving the optimization problem
+The multi-feature drifting loss is then
 \[
-\theta^{*}=
-\arg\min_{\theta\in\Theta} L(\theta).
+L_{\mathrm{drift}}
+=
+\frac{1}{NK}
+\sum_{i=1}^{N}\sum_{k=1}^{K}\sum_{j=1}^{J}
+\left\|
+\tilde g_{i,j}^{(k)}-\hat g_{i,j}^{(k)}
+\right\|_2^2.
 \]
+This is a direct conditional adaptation of the multi-feature sum used in the original Drifting formulation. 
 
-The solution $\theta^{*}$ defines the super-resolution model
-$f_{\theta^{*}}$, and the inference procedure consists of a single forward pass
+\subsection{Full objective}
+
+The full training objective is
 \[
-\hat{x}^{HR}=f_{\theta^{*}}(x^{LR}).
+L(\theta)
+=
+\lambda_{\mathrm{rec}}L_{\mathrm{rec}}
++
+\lambda_{\mathrm{LR}}L_{\mathrm{LR}}
++
+\lambda_{\mathrm{drift}}L_{\mathrm{drift}},
 \]
+where
+\[
+L_{\mathrm{rec}}
+=
+\frac{1}{N}
+\sum_{i=1}^{N}
+\|\hat{x}_i^{(1)}-x_i^{HR}\|_1
+\]
+is an anchor reconstruction term, and
+\[
+L_{\mathrm{LR}}
+=
+\frac{1}{NK}
+\sum_{i=1}^{N}\sum_{k=1}^{K}
+\|D(\hat{x}_i^{(k)})-x_i^{LR}\|_1
+\]
+enforces observation consistency for all stochastic outputs.
 
+The first term stabilizes a canonical reconstruction mode, the second enforces fidelity to the LR measurement, and the third encourages admissible diversity in the uncertain high-frequency component.
 
-\section{Experiment Plan}\label{sec:exp_plan}
+\subsection{Algorithm}
 
-\textbf{Goal}
-Validate that conditional Generative Drifting is applicable to super-resolution and achieves competitive quality with efficient one-step inference.
+\begin{algorithm}[t]
+\caption{Training step of conditional generative drifting for one-step super-resolution}
+\label{alg:cgd_sr_train}
+\begin{algorithmic}[1]
+\Require mini-batch $\{(x_i^{LR},x_i^{HR})\}_{i=1}^{B}$, generator $G_{\theta}$, degradation operator $D$, upsampler $u$, feature family $\Phi=\{\phi_j\}_{j=1}^{J}$
+\For{$i=1,\dots,B$}
+    \State compute bicubic baseline $x_i^{UP}\gets u(x_i^{LR})$
+    \State construct admissible positive set $\mathcal{P}_i=\{x_{i,m}^{+}\}_{m=1}^{M}$
+    \State optionally construct hard negatives $\{x_{i,h}^{-}\}_{h=1}^{H}$ and fetch queue negatives $\mathcal{Q}$
+    \For{$k=1,\dots,K$}
+        \State sample noise $\varepsilon_i^{(k)}\sim p_{\varepsilon}$
+        \State generate $\hat{x}_i^{(k)} \gets G_{\theta}(x_i^{LR},\varepsilon_i^{(k)})$
+    \EndFor
+\EndFor
+\For{each condition $i$ and feature index $j$}
+    \State compute residual generated features
+    \[
+    g_{i,j}^{(k)}=\phi_j(\hat{x}_i^{(k)})-\phi_j(x_i^{UP})
+    \]
+    \State compute residual positive features
+    \[
+    p_{i,j}^{(m)}=\phi_j(x_{i,m}^{+})-\phi_j(x_i^{UP})
+    \]
+    \State optionally compute hard-negative residual features
+    \[
+    h_{i,j}^{(h)}=\phi_j(x_{i,h}^{-})-\phi_j(x_i^{UP})
+    \]
+    \State compute per-condition normalization scales $S_{i,j}$ and $\Lambda_{i,j}$
+    \State compute normalized conditional drift $\tilde V_{i,j}^{(k)}$
+    \State form frozen target
+    \[
+    \hat g_{i,j}^{(k)}=
+    \operatorname{sg}\!\left(\tilde g_{i,j}^{(k)}+\eta \tilde V_{i,j}^{(k)}\right)
+    \]
+\EndFor
+\State compute
+\[
+L_{\mathrm{drift}}
+=
+\frac{1}{BK}
+\sum_{i=1}^{B}\sum_{k=1}^{K}\sum_{j=1}^{J}
+\left\|
+\tilde g_{i,j}^{(k)}-\hat g_{i,j}^{(k)}
+\right\|_2^2
+\]
+\State compute anchor reconstruction loss
+\[
+L_{\mathrm{rec}}
+=
+\frac{1}{B}\sum_{i=1}^{B}
+\|\hat{x}_i^{(1)}-x_i^{HR}\|_1
+\]
+\State compute LR-consistency loss
+\[
+L_{\mathrm{LR}}
+=
+\frac{1}{BK}\sum_{i=1}^{B}\sum_{k=1}^{K}
+\|D(\hat{x}_i^{(k)})-x_i^{LR}\|_1
+\]
+\State form
+\[
+L=
+\lambda_{\mathrm{rec}}L_{\mathrm{rec}}
++
+\lambda_{\mathrm{LR}}L_{\mathrm{LR}}
++
+\lambda_{\mathrm{drift}}L_{\mathrm{drift}}
+\]
+\State update parameters $\theta$ by one optimizer step minimizing \(L\)
+\end{algorithmic}
+\end{algorithm}
 
-\textbf{Dataset}
-DIV2K (800 train, 100 validation) with bicubic downsampling (×2, ×3, ×4). Additional testing on Set5, Set14, BSD100, Urban100.
+\subsection{Properties of the method}
 
-\textbf{Baselines}
-SRCNN, SRGAN, SR3, SinSR (as discussed in Introduction).
+The proposed method has the following properties:
+\begin{enumerate}
+    \item \textbf{One-step inference.} The model produces an HR output in a single forward pass.
+    \item \textbf{Conditional fidelity.} All generated samples are explicitly constrained by the LR observation through \(L_{\mathrm{LR}}\).
+    \item \textbf{Controlled stochasticity.} Diversity is allowed only within the admissible set of HR reconstructions associated with the same LR input.
+    \item \textbf{Residual feature drifting.} By operating in a residual feature space and summing drifting losses across multiple local and pooled descriptors, the method targets the uncertain high-frequency component rather than the deterministic low-frequency baseline.
+\end{enumerate}
 
-\textbf{Metrics}
-PSNR, SSIM, LPIPS, inference time (ms).
-
-\textbf{Hypotheses}
-\begin{itemize}
-    \item \textbf{H1 (Applicability):} The method successfully generates HR images from LR inputs.
-    \item \textbf{H2 (Quality):} Competitive PSNR/SSIM and better LPIPS than GAN-based methods.
-    \item \textbf{H3 (Speed):} Faster than diffusion models (SR3), comparable to one-step methods (SinSR).
-\end{itemize}
-
-\textbf{Expected Tables and Figures}
-\begin{itemize}
-    \item \textbf{Table 1:} Quantitative comparison (PSNR/SSIM/LPIPS) on DIV2K across scaling factors.
-    \item \textbf{Table 2:} Inference time comparison (ms per image).
-    \item \textbf{Figure 1:} Qualitative comparison (LR, Bicubic, SRCNN, SRGAN, SR3, SinSR, Ours, HR).
-    \item \textbf{Figure 2:} Ablation study on loss components.
-    \item \textbf{Figure 3:} Trade-off plot (inference time vs. LPIPS).
-\end{itemize}
-\section{Preliminary experiment}\label{sec:exp}
-
-\textbf{Goal.} The goal of the preliminary experiment is to verify the feasibility of conditional Generative Drifting for one-step super-resolution and compare it with a plain residual baseline.
-
-\textbf{Dataset.} We use FashionMNIST (60k train / 10k test, grayscale \(28\times28\)). Low-resolution inputs are generated synthetically by Gaussian blur (kernel \(5\times5\), \(\sigma=1.0\)) followed by bicubic downsampling with scale factor 4 and bicubic upsampling.
-
-\textbf{Setup.} The model is a lightweight residual CNN (6 blocks, 64 channels). The drifting version additionally uses a frozen feature encoder. Both models are trained for 3 epochs with AdamW, learning rate \(2\cdot10^{-4}\), batch size 128. Evaluation metric is PSNR.
-
-\textbf{Results.} Bicubic interpolation achieves 15.548 dB PSNR, the plain model reaches 18.619 dB, and the drifting model achieves 18.426 dB. Thus, both models outperform bicubic interpolation, while drifting does not improve over the plain baseline in this toy setup.
-
-\textbf{Preliminary report.} The results confirm that the proposed formulation is feasible and can be trained stably. However, its advantage is not yet visible on this simple dataset, which motivates further experiments on more realistic benchmarks and with additional metrics.
-
-\begin{table}[h]
-\centering
-\caption{PSNR (dB) on FashionMNIST toy experiment}
-\begin{tabular}{lc}
-\toprule
-Method & PSNR \\
-\midrule
-Bicubic & 15.548 \\
-Plain SR & 18.619 \\
-Drift SR & 18.426 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{figure}[h]
-\centering
-\includegraphics[width=0.8\linewidth]{toy_exp.png}
-\caption{Qualitative comparison of super-resolution results. From top to bottom: ground truth, bicubic interpolation, plain SR, and drifting SR.}
-\label{fig:sr_results}
-\end{figure}
-\section{Discussion}\label{sec:disc}
-
-TODO
-
-\section{Conclusion}\label{sec:concl}
-
-TODO
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+\newpage
 \bibliographystyle{unsrtnat}
 \bibliography{references}
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-\newpage
-\appendix
-\section{Appendix / supplemental material}\label{app}
-
-\subsection{Additional experiments / Proofs of Theorems}\label{app:exp}
-
-TODO
 
 \end{document}
