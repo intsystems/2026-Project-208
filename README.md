@@ -20,7 +20,7 @@
 
 - [LinkReview](LINKREVIEW.md)
 - [Code](code)
-- [Paper](paper/ibragimova_paper.pdf)
+- [Paper](paper/paper_ibragimova.pdf)
 - [Slides]()
 
 ## Abstract
